@@ -22,6 +22,7 @@ const topic = crypto
 
 const swarm = new Hyperswarm()
 
+// Deliberately unlimited: a room may contain any number of peer connections.
 const connections = new Set()
 
 function send (conn, message) {
@@ -97,14 +98,24 @@ swarm.on('connection', (conn, info) => {
   })
 })
 
+swarm.on('error', error => {
+  console.error(`[SWARM ERROR] ${error.message}`)
+})
+
 const discovery = swarm.join(topic, {
   client: true,
   server: true
 })
 
-await discovery.flushed()
+discovery.flushed()
+  .then(() => {
+    console.log('[DISCOVERY] Room announced ✓')
+  })
+  .catch(error => {
+    console.error(`[DISCOVERY ERROR] ${error.message}`)
+  })
 
-console.log('[SWARM] Ready ✓')
+console.log('[SWARM] Started ✓')
 console.log('[INPUT] Type a message and press ENTER')
 console.log()
 
