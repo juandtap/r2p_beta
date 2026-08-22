@@ -1,6 +1,11 @@
 import Hyperswarm from 'hyperswarm'
 import crypto from 'crypto'
 import readline from 'readline'
+import {
+  PROTOCOL_VERSION,
+  createMessageDecoder,
+  encodeMessage
+} from './protocol.mjs'
 
 const room = process.argv[2]
 
@@ -18,6 +23,13 @@ const topic = crypto
 const swarm = new Hyperswarm()
 
 const connections = new Set()
+
+function send (conn, message) {
+  conn.write(encodeMessage({
+    v: PROTOCOL_VERSION,
+    ...message
+  }))
+}
 
 console.log()
 console.log('=== P2P ROGUE NETWORK ===')
@@ -39,9 +51,36 @@ swarm.on('connection', (conn, info) => {
   console.log(`[NETWORK] ${connections.size} peer(s) connected`)
   console.log()
 
-  conn.on('data', data => {
-    console.log(`\n[${peerId}] ${data.toString()}`)
-    process.stdout.write('> ')
+  const decode = createMessageDecoder({
+    onMessage: message => {
+      if (message.type === 'HELLO') {
+        console.log(`[PROTOCOL] ${peerId} uses version ${message.v}`)
+      } else if (message.type === 'CHAT') {
+        const text = message.payload?.text
+
+        if (typeof text !== 'string') {
+          console.log(`[PROTOCOL ERROR] ${peerId}: CHAT payload.text must be a string`)
+          conn.destroy()
+          return
+        }
+
+        console.log(`\n[${peerId}] ${text}`)
+        process.stdout.write('> ')
+      } else {
+        console.log(`[PROTOCOL] Ignoring unknown message type: ${message.type}`)
+      }
+    },
+    onError: error => {
+      console.log(`[PROTOCOL ERROR] ${peerId}: ${error.message}`)
+      conn.destroy()
+    }
+  })
+
+  conn.on('data', decode)
+
+  send(conn, {
+    type: 'HELLO',
+    payload: { role: 'player' }
   })
 
   conn.on('close', () => {
@@ -86,7 +125,10 @@ rl.on('line', line => {
   }
 
   for (const conn of connections) {
-    conn.write(message)
+    send(conn, {
+      type: 'CHAT',
+      payload: { text: message }
+    })
   }
 
   console.log(`[YOU] ${message}`)
