@@ -43,6 +43,10 @@ function validatePlayerState (payload) {
     throw new Error('PLAYER_STATE state must be ALIVE or DEAD')
   }
 
+  if (!['idle', 'movement', 'attacking'].includes(payload.action)) {
+    throw new Error('PLAYER_STATE action must be idle, movement or attacking')
+  }
+
   if (!Number.isInteger(payload.x) || !Number.isInteger(payload.y)) {
     throw new Error('PLAYER_STATE x and y must be integers')
   }

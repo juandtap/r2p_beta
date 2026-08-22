@@ -90,6 +90,7 @@ Networking adds the authenticated `playerId` outside this event.
   "payload":{
     "roomId":"dungeon-room-12",
     "state":"ALIVE",
+    "action":"movement",
     "x":14,
     "y":7,
     "seq":42
@@ -97,9 +98,11 @@ Networking adds the authenticated `playerId` outside this event.
 }
 ```
 
-`state` is `ALIVE` or `DEAD`. `x`, `y` and `seq` are non-negative or signed
-integers as appropriate; `seq` must increase for every state sent by one
-player. Networking discards duplicated or older states.
+`state` is `ALIVE` or `DEAD`. `action` is `idle`, `movement` or `attacking`.
+Because combat eliminates a player with one successful hit, no health field is
+part of this protocol. `x`, `y` and `seq` are non-negative or signed integers as
+appropriate; `seq` must increase for every state sent by one player. Networking
+discards duplicated or older states.
 
 Do not send this at an unrestricted render frame rate. For a terminal game,
 send on movement/state changes, or cap snapshots around 10–20 updates per
@@ -115,6 +118,7 @@ The receiving game gets the authenticated identity separately:
     "payload":{
       "roomId":"dungeon-room-12",
       "state":"ALIVE",
+      "action":"movement",
       "x":14,
       "y":7,
       "seq":42
@@ -139,6 +143,10 @@ Only the current session coordinator may announce the final result:
 
 `winnerId` may be `null` for `DRAW` or `ABORTED`. Valid reasons are
 `LAST_PLAYER_ALIVE`, `DRAW` and `ABORTED`.
+
+If the session coordinator exits with `/quit`, `Ctrl+C` or `Ctrl+Z`, networking
+sends `GAME_OVER` with `winnerId: null` and `reason: "ABORTED"` before closing.
+Every game instance must stop its simulation when it receives `GAME_OVER`.
 
 Additional combat/item events may be added later without changing networking,
 as long as they follow the common envelope.

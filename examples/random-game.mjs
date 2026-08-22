@@ -22,6 +22,7 @@ export function createRandomGame ({ sendGameEvent, log = console.log }) {
       payload: {
         roomId: roomFor(x, y),
         state: 'ALIVE',
+        action: 'movement',
         x,
         y,
         seq
@@ -42,6 +43,12 @@ export function createRandomGame ({ sendGameEvent, log = console.log }) {
     },
 
     handleRemoteEvent ({ playerId, event }) {
+      if (event.type === 'GAME_OVER') {
+        log(`[RANDOM GAME] Game over: ${event.payload.reason}`)
+        this.stop()
+        return
+      }
+
       if (event.type !== 'PLAYER_STATE') return
 
       const { roomId, state, x, y, seq } = event.payload

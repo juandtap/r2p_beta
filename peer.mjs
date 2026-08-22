@@ -37,6 +37,7 @@ const session = new Session({
 
 // Deliberately unlimited: a room may contain any number of peer connections.
 const connections = new Set()
+let shuttingDown = false
 const game = new GameAdapter({
   sendEvent: event => {
     if (event.type === 'GAME_OVER' && !session.isCoordinator) {
@@ -68,6 +69,30 @@ function send (conn, message) {
 
 function broadcast (message) {
   for (const conn of connections) send(conn, message)
+}
+
+async function broadcastAndFlush (message) {
+  const encoded = encodeMessage({
+    v: PROTOCOL_VERSION,
+    ...message
+  })
+
+  await Promise.allSettled([...connections].map(conn => new Promise(resolve => {
+    let finished = false
+    const finish = () => {
+      if (finished) return
+      finished = true
+      clearTimeout(timeout)
+      resolve()
+    }
+    const timeout = setTimeout(finish, 500)
+
+    try {
+      conn.write(encoded, finish)
+    } catch {
+      finish()
+    }
+  })))
 }
 
 function showPlayers () {
@@ -176,6 +201,14 @@ swarm.on('connection', (conn, info) => {
           console.log(`[PROTOCOL ERROR] ${shortPeerId}: only coordinator can send GAME_OVER`)
           conn.destroy()
           return
+        }
+
+        if (event.type === 'GAME_OVER') {
+          const { winnerId, reason } = event.payload
+          console.log('[SESSION] Game over')
+          console.log(`[SESSION] Reason: ${reason}`)
+          console.log(`[SESSION] Winner: ${winnerId ? winnerId.slice(0, 8) : 'none'}`)
+          randomGame?.stop()
         }
 
         if (!game.receive({ playerId: peerId, event })) {
@@ -316,9 +349,29 @@ rl.on('line', line => {
   rl.prompt()
 })
 
-process.on('SIGINT', async () => {
+async function shutdown () {
+  if (shuttingDown) return
+  shuttingDown = true
+
   console.log()
   console.log('[SWARM] Leaving network...')
+
+  if (session.isCoordinator && connections.size > 0) {
+    const event = {
+      type: 'GAME_OVER',
+      payload: {
+        winnerId: null,
+        reason: 'ABORTED'
+      }
+    }
+
+    console.log('[SESSION] Coordinator ended the game')
+    await broadcastAndFlush({
+      type: 'GAME_EVENT',
+      playerId: selfId,
+      payload: { event }
+    })
+  }
 
   rl.close()
   randomGame?.stop()
@@ -326,4 +379,7 @@ process.on('SIGINT', async () => {
   await swarm.destroy()
 
   process.exit(0)
-})
+}
+
+process.on('SIGINT', shutdown)
+process.on('SIGTSTP', shutdown)

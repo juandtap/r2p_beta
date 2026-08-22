@@ -16,13 +16,27 @@ test('connects a game without exposing networking details', () => {
   adapter.start({ selfId: 'a', seed: 'seed', players: ['a', 'b'] })
   adapter.send({
     type: 'PLAYER_STATE',
-    payload: { roomId: 'room-1', state: 'ALIVE', x: 1, y: 0, seq: 1 }
+    payload: {
+      roomId: 'room-1',
+      state: 'ALIVE',
+      action: 'movement',
+      x: 1,
+      y: 0,
+      seq: 1
+    }
   })
   adapter.receive({
     playerId: 'b',
     event: {
       type: 'PLAYER_STATE',
-      payload: { roomId: 'room-2', state: 'ALIVE', x: 0, y: 1, seq: 1 }
+      payload: {
+        roomId: 'room-2',
+        state: 'ALIVE',
+        action: 'movement',
+        x: 0,
+        y: 1,
+        seq: 1
+      }
     }
   })
 
@@ -39,7 +53,18 @@ test('rejects invalid game events', () => {
   })
 
   assert.equal(adapter.send({ payload: {} }), false)
-  assert.equal(errors.length, 1)
+  assert.equal(adapter.send({
+    type: 'PLAYER_STATE',
+    payload: {
+      roomId: 'room-1',
+      state: 'ALIVE',
+      action: 'jumping',
+      x: 0,
+      y: 0,
+      seq: 1
+    }
+  }), false)
+  assert.equal(errors.length, 2)
 })
 
 test('discards stale player state snapshots', () => {
@@ -54,7 +79,14 @@ test('discards stale player state snapshots', () => {
     playerId: 'peer-b',
     event: {
       type: 'PLAYER_STATE',
-      payload: { roomId: 'room-1', state: 'ALIVE', x: seq, y: 0, seq }
+      payload: {
+        roomId: 'room-1',
+        state: 'ALIVE',
+        action: 'movement',
+        x: seq,
+        y: 0,
+        seq
+      }
     }
   })
 
