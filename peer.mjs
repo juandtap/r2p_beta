@@ -7,11 +7,14 @@ import {
   encodeMessage
 } from './protocol.mjs'
 import { Session, defaultName } from './session.mjs'
+import { EngineBridge } from './engine-bridge.mjs'
 
 const room = process.argv[2]
+const engineFlag = process.argv.indexOf('--engine')
+const enginePath = engineFlag === -1 ? null : process.argv[engineFlag + 1]
 
-if (!room) {
-  console.error('Usage: node peer.mjs <room-name>')
+if (!room || (engineFlag !== -1 && !enginePath)) {
+  console.error('Usage: node peer.mjs <room-name> [--engine <executable>]')
   process.exit(1)
 }
 
@@ -34,6 +37,7 @@ const session = new Session({
 
 // Deliberately unlimited: a room may contain any number of peer connections.
 const connections = new Set()
+let engine = null
 
 function send (conn, message) {
   conn.write(encodeMessage({
@@ -77,6 +81,13 @@ function handleStart (message, peerId) {
 
   console.log(`[SESSION] Match starting with ${players.length} player(s)`)
   console.log(`[SESSION] Dungeon seed: ${seed}`)
+
+  engine?.send({
+    type: 'MATCH_START',
+    selfId,
+    seed,
+    players
+  })
 }
 
 console.log()
@@ -85,9 +96,29 @@ console.log()
 console.log(`[ROOM] ${room}`)
 console.log(`[ROOM ID] ${roomId}`)
 console.log(`[SELF] ${shortSelfId}`)
+console.log(`[ENGINE] ${enginePath || 'interactive mode'}`)
 console.log('[SWARM] Joining game room...')
 console.log('[DISCOVERY] Searching for peers...')
 console.log()
+
+if (enginePath) {
+  engine = new EngineBridge({
+    executable: enginePath,
+    onEvent: event => {
+      broadcast({
+        type: 'GAME_EVENT',
+        playerId: selfId,
+        payload: { event }
+      })
+    },
+    onExit: ({ code, signal }) => {
+      console.log(`[ENGINE] Exited (${signal || code})`)
+    },
+    onError: error => {
+      console.error(`[ENGINE ERROR] ${error.message}`)
+    }
+  })
+}
 
 swarm.on('connection', (conn, info) => {
   const peerId = conn.remotePublicKey.toString('hex')
@@ -127,6 +158,30 @@ swarm.on('connection', (conn, info) => {
         console.log(`[SESSION] ${session.players.get(peerId).name} is ${message.payload.ready ? 'ready' : 'not ready'}`)
       } else if (message.type === 'START') {
         handleStart(message, peerId)
+      } else if (message.type === 'GAME_EVENT') {
+        const event = message.payload?.event
+        if (
+          message.playerId !== peerId ||
+          !event ||
+          typeof event !== 'object' ||
+          Array.isArray(event) ||
+          typeof event.type !== 'string'
+        ) {
+          console.log(`[PROTOCOL ERROR] ${shortPeerId}: invalid GAME_EVENT message`)
+          conn.destroy()
+          return
+        }
+
+        if (!engine) {
+          console.log(`[GAME EVENT] ${shortPeerId}: ${JSON.stringify(event)}`)
+          return
+        }
+
+        engine.send({
+          type: 'REMOTE_EVENT',
+          playerId: peerId,
+          event
+        })
       } else if (message.type === 'CHAT') {
         const text = message.payload?.text
 
@@ -267,6 +322,7 @@ process.on('SIGINT', async () => {
   console.log('[SWARM] Leaving network...')
 
   rl.close()
+  engine?.close()
 
   await swarm.destroy()
 

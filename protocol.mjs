@@ -7,7 +7,7 @@ export function encodeMessage (message) {
   return b4a.from(`${JSON.stringify(message)}\n`)
 }
 
-export function createMessageDecoder ({ onMessage, onError }) {
+export function createJsonlDecoder ({ onValue, onError }) {
   let pending = b4a.alloc(0)
 
   return chunk => {
@@ -38,24 +38,35 @@ export function createMessageDecoder ({ onMessage, onError }) {
       }
 
       try {
-        const message = JSON.parse(b4a.toString(line))
+        const value = JSON.parse(b4a.toString(line))
 
-        if (!message || typeof message !== 'object' || Array.isArray(message)) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
           throw new Error('Message must be a JSON object')
         }
 
-        if (message.v !== PROTOCOL_VERSION) {
-          throw new Error(`Unsupported protocol version: ${message.v}`)
-        }
-
-        if (typeof message.type !== 'string' || message.type.length === 0) {
-          throw new Error('Message type is required')
-        }
-
-        onMessage(message)
+        onValue(value)
       } catch (error) {
         onError(error)
       }
     }
   }
+}
+
+export function createMessageDecoder ({ onMessage, onError }) {
+  return createJsonlDecoder({
+    onValue: message => {
+      if (message.v !== PROTOCOL_VERSION) {
+        onError(new Error(`Unsupported protocol version: ${message.v}`))
+        return
+      }
+
+      if (typeof message.type !== 'string' || message.type.length === 0) {
+        onError(new Error('Message type is required'))
+        return
+      }
+
+      onMessage(message)
+    },
+    onError
+  })
 }
