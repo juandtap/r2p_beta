@@ -6,6 +6,7 @@ import {
   createMessageDecoder,
   encodeMessage
 } from './protocol.mjs'
+import { Session, defaultName } from './session.mjs'
 
 const room = process.argv[2]
 
@@ -21,12 +22,15 @@ const topic = crypto
   .digest()
 
 const swarm = new Hyperswarm({ maxPeers: Infinity })
-const selfId = swarm.keyPair.publicKey
-  .toString('hex')
-  .slice(0, 8)
+const selfId = swarm.keyPair.publicKey.toString('hex')
+const shortSelfId = selfId.slice(0, 8)
 const roomId = topic
   .toString('hex')
   .slice(0, 8)
+const session = new Session({
+  selfId,
+  selfName: defaultName(selfId)
+})
 
 // Deliberately unlimited: a room may contain any number of peer connections.
 const connections = new Set()
@@ -38,24 +42,61 @@ function send (conn, message) {
   }))
 }
 
+function broadcast (message) {
+  for (const conn of connections) send(conn, message)
+}
+
+function showPlayers () {
+  console.log('\nPlayers:')
+
+  for (const player of session.orderedPlayers) {
+    const state = player.ready ? 'READY' : 'WAITING'
+    const coordinator = player.playerId === session.coordinatorId
+      ? ' [COORDINATOR]'
+      : ''
+    const you = player.playerId === selfId ? ' [YOU]' : ''
+
+    console.log(`- ${player.name} [${state}]${coordinator}${you}`)
+  }
+
+  console.log()
+}
+
+function handleStart (message, peerId) {
+  if (peerId !== session.coordinatorId) {
+    console.log(`[SESSION] Rejected START from non-coordinator ${peerId.slice(0, 8)}`)
+    return
+  }
+
+  const seed = message.payload?.seed
+  const players = message.payload?.players
+  if (typeof seed !== 'string' || !Array.isArray(players)) {
+    console.log('[SESSION] Rejected malformed START message')
+    return
+  }
+
+  console.log(`[SESSION] Match starting with ${players.length} player(s)`)
+  console.log(`[SESSION] Dungeon seed: ${seed}`)
+}
+
 console.log()
 console.log('=== P2P ROGUE NETWORK ===')
 console.log()
 console.log(`[ROOM] ${room}`)
 console.log(`[ROOM ID] ${roomId}`)
-console.log(`[SELF] ${selfId}`)
+console.log(`[SELF] ${shortSelfId}`)
 console.log('[SWARM] Joining game room...')
 console.log('[DISCOVERY] Searching for peers...')
 console.log()
 
 swarm.on('connection', (conn, info) => {
-  const peerId = conn.remotePublicKey
-    .toString('hex')
-    .slice(0, 8)
+  const peerId = conn.remotePublicKey.toString('hex')
+  const shortPeerId = peerId.slice(0, 8)
 
   connections.add(conn)
+  session.addPlayer(peerId)
 
-  console.log(`[PEER] ${peerId} discovered`)
+  console.log(`[PEER] ${shortPeerId} discovered`)
   console.log(`[DIRECTION] ${info.client ? 'outgoing' : 'incoming'}`)
   console.log(`[CONNECTION] Successful ✓`)
   console.log(`[NETWORK] ${connections.size} peer(s) connected`)
@@ -64,24 +105,45 @@ swarm.on('connection', (conn, info) => {
   const decode = createMessageDecoder({
     onMessage: message => {
       if (message.type === 'HELLO') {
-        console.log(`[PROTOCOL] ${peerId} uses version ${message.v}`)
-      } else if (message.type === 'CHAT') {
-        const text = message.payload?.text
-
-        if (typeof text !== 'string') {
-          console.log(`[PROTOCOL ERROR] ${peerId}: CHAT payload.text must be a string`)
+        console.log(`[PROTOCOL] ${shortPeerId} uses version ${message.v}`)
+      } else if (message.type === 'JOIN') {
+        if (message.playerId !== peerId) {
+          console.log(`[PROTOCOL ERROR] ${shortPeerId}: invalid player identity`)
           conn.destroy()
           return
         }
 
-        console.log(`\n[${peerId}] ${text}`)
+        const name = message.payload?.name
+        session.addPlayer(peerId, typeof name === 'string' ? name : undefined)
+        console.log(`[SESSION] ${session.players.get(peerId).name} joined`)
+      } else if (message.type === 'READY') {
+        if (message.playerId !== peerId || typeof message.payload?.ready !== 'boolean') {
+          console.log(`[PROTOCOL ERROR] ${shortPeerId}: invalid READY message`)
+          conn.destroy()
+          return
+        }
+
+        session.setReady(peerId, message.payload.ready)
+        console.log(`[SESSION] ${session.players.get(peerId).name} is ${message.payload.ready ? 'ready' : 'not ready'}`)
+      } else if (message.type === 'START') {
+        handleStart(message, peerId)
+      } else if (message.type === 'CHAT') {
+        const text = message.payload?.text
+
+        if (typeof text !== 'string') {
+          console.log(`[PROTOCOL ERROR] ${shortPeerId}: CHAT payload.text must be a string`)
+          conn.destroy()
+          return
+        }
+
+        console.log(`\n[${shortPeerId}] ${text}`)
         process.stdout.write('> ')
       } else {
         console.log(`[PROTOCOL] Ignoring unknown message type: ${message.type}`)
       }
     },
     onError: error => {
-      console.log(`[PROTOCOL ERROR] ${peerId}: ${error.message}`)
+      console.log(`[PROTOCOL ERROR] ${shortPeerId}: ${error.message}`)
       conn.destroy()
     }
   })
@@ -97,17 +159,25 @@ swarm.on('connection', (conn, info) => {
     }
   })
 
+  send(conn, {
+    type: 'JOIN',
+    playerId: selfId,
+    payload: { name: session.players.get(selfId).name }
+  })
+
   conn.on('close', () => {
     connections.delete(conn)
+    const player = session.players.get(peerId)
+    session.removePlayer(peerId)
 
     console.log()
-    console.log(`[DISCONNECT] ${peerId}`)
+    console.log(`[DISCONNECT] ${player?.name || shortPeerId}`)
     console.log(`[NETWORK] ${connections.size} peer(s) connected`)
     console.log()
   })
 
   conn.on('error', err => {
-    console.log(`[ERROR] ${peerId}: ${err.message}`)
+    console.log(`[ERROR] ${shortPeerId}: ${err.message}`)
   })
 })
 
@@ -148,14 +218,46 @@ rl.on('line', line => {
     return
   }
 
-  for (const conn of connections) {
-    send(conn, {
+  if (message === '/players') {
+    showPlayers()
+  } else if (message === '/ready') {
+    session.setReady(selfId, true)
+    broadcast({
+      type: 'READY',
+      playerId: selfId,
+      payload: { ready: true }
+    })
+    console.log('[SESSION] You are ready')
+  } else if (message === '/start') {
+    const result = session.canStart()
+
+    if (!result.ok) {
+      console.log(`[SESSION] Cannot start: ${result.reason}`)
+    } else {
+      const start = {
+        type: 'START',
+        playerId: selfId,
+        payload: {
+          seed: crypto.randomBytes(16).toString('hex'),
+          players: session.orderedPlayers.map(player => player.playerId)
+        }
+      }
+
+      broadcast(start)
+      handleStart(start, selfId)
+    }
+  } else if (message === '/quit') {
+    process.emit('SIGINT')
+    return
+  } else {
+    broadcast({
       type: 'CHAT',
+      playerId: selfId,
       payload: { text: message }
     })
-  }
 
-  console.log(`[YOU] ${message}`)
+    console.log(`[YOU] ${message}`)
+  }
 
   rl.prompt()
 })
