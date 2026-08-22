@@ -20,7 +20,13 @@ const topic = crypto
   .update(room)
   .digest()
 
-const swarm = new Hyperswarm()
+const swarm = new Hyperswarm({ maxPeers: Infinity })
+const selfId = swarm.keyPair.publicKey
+  .toString('hex')
+  .slice(0, 8)
+const roomId = topic
+  .toString('hex')
+  .slice(0, 8)
 
 // Deliberately unlimited: a room may contain any number of peer connections.
 const connections = new Set()
@@ -36,6 +42,8 @@ console.log()
 console.log('=== P2P ROGUE NETWORK ===')
 console.log()
 console.log(`[ROOM] ${room}`)
+console.log(`[ROOM ID] ${roomId}`)
+console.log(`[SELF] ${selfId}`)
 console.log('[SWARM] Joining game room...')
 console.log('[DISCOVERY] Searching for peers...')
 console.log()
@@ -48,6 +56,7 @@ swarm.on('connection', (conn, info) => {
   connections.add(conn)
 
   console.log(`[PEER] ${peerId} discovered`)
+  console.log(`[DIRECTION] ${info.client ? 'outgoing' : 'incoming'}`)
   console.log(`[CONNECTION] Successful ✓`)
   console.log(`[NETWORK] ${connections.size} peer(s) connected`)
   console.log()
@@ -81,7 +90,11 @@ swarm.on('connection', (conn, info) => {
 
   send(conn, {
     type: 'HELLO',
-    payload: { role: 'player' }
+    payload: {
+      role: 'player',
+      peerId: selfId,
+      roomId
+    }
   })
 
   conn.on('close', () => {
