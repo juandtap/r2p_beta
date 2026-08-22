@@ -8,14 +8,25 @@ import {
 } from './protocol.mjs'
 import { Session, defaultName } from './session.mjs'
 import { EngineBridge } from './engine-bridge.mjs'
+import { ensureMockEngine } from './dev-engine.mjs'
 
 const room = process.argv[2]
 const engineFlag = process.argv.indexOf('--engine')
-const enginePath = engineFlag === -1 ? null : process.argv[engineFlag + 1]
+const noEngine = process.argv.includes('--no-engine')
+let enginePath = engineFlag === -1 ? null : process.argv[engineFlag + 1]
 
-if (!room || (engineFlag !== -1 && !enginePath)) {
-  console.error('Usage: node peer.mjs <room-name> [--engine <executable>]')
+if (!room || (engineFlag !== -1 && !enginePath) || (engineFlag !== -1 && noEngine)) {
+  console.error('Usage: node peer.mjs <room-name> [--engine <executable> | --no-engine]')
   process.exit(1)
+}
+
+if (!enginePath && !noEngine) {
+  try {
+    enginePath = ensureMockEngine()
+  } catch (error) {
+    console.error(`[ENGINE ERROR] ${error.message}`)
+    process.exit(1)
+  }
 }
 
 // Same room name => same 32-byte topic

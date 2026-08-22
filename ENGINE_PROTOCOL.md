@@ -35,3 +35,28 @@ For an event produced by another player's engine:
 
 Messages may be split or combined by the operating system. The engine must
 buffer input until it receives `\n`. The maximum accepted line is 64 KiB.
+
+## Test harness
+
+`examples/mock-engine.c` is a minimal integration harness, not the game engine.
+Build and run the networking layer with:
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror -O2 \
+  examples/mock-engine.c -o mock-engine.bin
+node peer.mjs <room-name> --engine ./mock-engine.bin
+```
+
+During development, the normal command does those steps automatically. It
+recompiles only when the binary is missing or `mock-engine.c` is newer:
+
+```sh
+node peer.mjs <room-name>
+```
+
+Use `--no-engine` only when testing the networking layer without a child
+process. Generated `*.bin` files are intentionally excluded from Git.
+
+After every peer runs `/ready`, the coordinator runs `/start`. Each local mock
+engine receives `MATCH_START` and produces `ENGINE_READY`; remote peers display
+or forward that event through their own bridge.
