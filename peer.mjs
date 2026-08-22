@@ -7,26 +7,15 @@ import {
   encodeMessage
 } from './protocol.mjs'
 import { Session, defaultName } from './session.mjs'
-import { EngineBridge } from './engine-bridge.mjs'
-import { ensureMockEngine } from './dev-engine.mjs'
+import { GameAdapter } from './game-adapter.mjs'
+import { createRandomGame } from './examples/random-game.mjs'
 
 const room = process.argv[2]
-const engineFlag = process.argv.indexOf('--engine')
-const noEngine = process.argv.includes('--no-engine')
-let enginePath = engineFlag === -1 ? null : process.argv[engineFlag + 1]
+const randomGameEnabled = process.argv.includes('--random-game')
 
-if (!room || (engineFlag !== -1 && !enginePath) || (engineFlag !== -1 && noEngine)) {
-  console.error('Usage: node peer.mjs <room-name> [--engine <executable> | --no-engine]')
+if (!room) {
+  console.error('Usage: node peer.mjs <room-name>')
   process.exit(1)
-}
-
-if (!enginePath && !noEngine) {
-  try {
-    enginePath = ensureMockEngine()
-  } catch (error) {
-    console.error(`[ENGINE ERROR] ${error.message}`)
-    process.exit(1)
-  }
 }
 
 // Same room name => same 32-byte topic
@@ -48,7 +37,27 @@ const session = new Session({
 
 // Deliberately unlimited: a room may contain any number of peer connections.
 const connections = new Set()
-let engine = null
+const game = new GameAdapter({
+  sendEvent: event => {
+    if (event.type === 'GAME_OVER' && !session.isCoordinator) {
+      throw new Error('Only the coordinator can send GAME_OVER')
+    }
+
+    broadcast({
+      type: 'GAME_EVENT',
+      playerId: selfId,
+      payload: { event }
+    })
+  },
+  onError: error => {
+    console.error(`[GAME ERROR] ${error.message}`)
+  }
+})
+const randomGame = randomGameEnabled
+  ? createRandomGame({ sendGameEvent: event => game.send(event) })
+  : null
+
+if (randomGame) game.attach(randomGame)
 
 function send (conn, message) {
   conn.write(encodeMessage({
@@ -93,8 +102,7 @@ function handleStart (message, peerId) {
   console.log(`[SESSION] Match starting with ${players.length} player(s)`)
   console.log(`[SESSION] Dungeon seed: ${seed}`)
 
-  engine?.send({
-    type: 'MATCH_START',
+  game.start({
     selfId,
     seed,
     players
@@ -107,29 +115,10 @@ console.log()
 console.log(`[ROOM] ${room}`)
 console.log(`[ROOM ID] ${roomId}`)
 console.log(`[SELF] ${shortSelfId}`)
-console.log(`[ENGINE] ${enginePath || 'interactive mode'}`)
+console.log(`[GAME] ${randomGame ? 'random-state test' : 'not attached'}`)
 console.log('[SWARM] Joining game room...')
 console.log('[DISCOVERY] Searching for peers...')
 console.log()
-
-if (enginePath) {
-  engine = new EngineBridge({
-    executable: enginePath,
-    onEvent: event => {
-      broadcast({
-        type: 'GAME_EVENT',
-        playerId: selfId,
-        payload: { event }
-      })
-    },
-    onExit: ({ code, signal }) => {
-      console.log(`[ENGINE] Exited (${signal || code})`)
-    },
-    onError: error => {
-      console.error(`[ENGINE ERROR] ${error.message}`)
-    }
-  })
-}
 
 swarm.on('connection', (conn, info) => {
   const peerId = conn.remotePublicKey.toString('hex')
@@ -183,16 +172,15 @@ swarm.on('connection', (conn, info) => {
           return
         }
 
-        if (!engine) {
-          console.log(`[GAME EVENT] ${shortPeerId}: ${JSON.stringify(event)}`)
+        if (event.type === 'GAME_OVER' && peerId !== session.coordinatorId) {
+          console.log(`[PROTOCOL ERROR] ${shortPeerId}: only coordinator can send GAME_OVER`)
+          conn.destroy()
           return
         }
 
-        engine.send({
-          type: 'REMOTE_EVENT',
-          playerId: peerId,
-          event
-        })
+        if (!game.receive({ playerId: peerId, event })) {
+          console.log(`[GAME EVENT] ${shortPeerId}: ${JSON.stringify(event)}`)
+        }
       } else if (message.type === 'CHAT') {
         const text = message.payload?.text
 
@@ -333,7 +321,7 @@ process.on('SIGINT', async () => {
   console.log('[SWARM] Leaving network...')
 
   rl.close()
-  engine?.close()
+  randomGame?.stop()
 
   await swarm.destroy()
 
