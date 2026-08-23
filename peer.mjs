@@ -2,6 +2,11 @@ import Hyperswarm from 'hyperswarm'
 import crypto from 'bare-crypto'
 import process from 'bare-process'
 import Readline from 'bare-readline'
+import { createServer, connect as tcpConnect } from 'bare-tcp'
+import b4a from 'b4a'
+import path from 'bare-path'
+import fs from 'bare-fs'
+import { fileURLToPath } from 'bare-url'
 import {
   PROTOCOL_VERSION,
   createMessageDecoder,
@@ -12,6 +17,26 @@ import { GameAdapter } from './game-adapter.mjs'
 import { createRandomGame } from './examples/random-game.mjs'
 import { executeMinecraftAction } from './minecraft-executor.mjs'
 import { StuipId } from './stuip-id.mjs'
+
+// Tunneling state
+const activeTunnels = new Map() // localPort -> { server, peerId, serverId }
+const localStreams = new Map() // streamId -> { socket, peerId }
+const remoteStreams = new Map() // streamId -> { socket, peerId }
+
+function getServerPort (serverId) {
+  try {
+    const serversDir = fileURLToPath(new URL('./servers', import.meta.url))
+    const propertiesPath = path.join(serversDir, serverId, 'server.properties')
+    const content = fs.readFileSync(propertiesPath, 'utf8')
+    const match = content.match(/^server-port=(\d+)/m)
+    if (match) {
+      return parseInt(match[1], 10)
+    }
+  } catch {
+    // Ignore and fallback
+  }
+  return 25565
+}
 
 const room = process.argv[2]
 const randomGameEnabled = process.argv.includes('--random-game')
@@ -253,6 +278,91 @@ swarm.on('connection', (conn, info) => {
         if (!game.receive({ playerId: peerId, event })) {
           console.log(`[GAME EVENT] ${shortPeerId}: ${JSON.stringify(event)}`)
         }
+      } else if (message.type === 'TUNNEL_OPEN') {
+        const { streamId, serverId } = message
+        if (typeof streamId !== 'string' || typeof serverId !== 'string') {
+          console.log(`[TUNNEL ERROR] Invalid TUNNEL_OPEN message from ${shortPeerId}`)
+          return
+        }
+
+        const port = getServerPort(serverId)
+        console.log(`\n[TUNNEL] Peer ${shortPeerId} requested tunnel connection to Minecraft server ${serverId} (port ${port})`)
+        process.stdout.write('> ')
+
+        const socket = tcpConnect(port, '127.0.0.1', () => {
+          remoteStreams.set(streamId, { socket, peerId })
+
+          socket.on('data', chunk => {
+            const peerConn = connectionsByPeerId.get(peerId)
+            if (peerConn) {
+              send(peerConn, {
+                type: 'TUNNEL_DATA',
+                streamId,
+                data: b4a.toString(chunk, 'base64')
+              })
+            }
+          })
+
+          socket.on('close', () => {
+            remoteStreams.delete(streamId)
+            const peerConn = connectionsByPeerId.get(peerId)
+            if (peerConn) {
+              send(peerConn, {
+                type: 'TUNNEL_CLOSE',
+                streamId
+              })
+            }
+          })
+
+          socket.on('error', err => {
+            console.error(`[TUNNEL Remote Socket Error] ${err.message}`)
+            socket.destroy()
+          })
+        })
+
+        socket.on('error', err => {
+          console.error(`\n[TUNNEL ERROR] Failed to connect to local Minecraft server ${serverId} (port ${port}): ${err.message}`)
+          process.stdout.write('> ')
+          const peerConn = connectionsByPeerId.get(peerId)
+          if (peerConn) {
+            send(peerConn, {
+              type: 'TUNNEL_CLOSE',
+              streamId
+            })
+          }
+        })
+      } else if (message.type === 'TUNNEL_DATA') {
+        const { streamId, data } = message
+        if (typeof streamId !== 'string' || typeof data !== 'string') {
+          return
+        }
+
+        const localStream = localStreams.get(streamId)
+        if (localStream) {
+          localStream.socket.write(b4a.from(data, 'base64'))
+        } else {
+          const remoteStream = remoteStreams.get(streamId)
+          if (remoteStream) {
+            remoteStream.socket.write(b4a.from(data, 'base64'))
+          }
+        }
+      } else if (message.type === 'TUNNEL_CLOSE') {
+        const { streamId } = message
+        if (typeof streamId !== 'string') {
+          return
+        }
+
+        const localStream = localStreams.get(streamId)
+        if (localStream) {
+          localStream.socket.destroy()
+          localStreams.delete(streamId)
+        } else {
+          const remoteStream = remoteStreams.get(streamId)
+          if (remoteStream) {
+            remoteStream.socket.destroy()
+            remoteStreams.delete(streamId)
+          }
+        }
       } else if (message.type === 'CHAT') {
         const text = message.payload?.text
 
@@ -301,6 +411,28 @@ swarm.on('connection', (conn, info) => {
     const player = session.players.get(peerId)
     session.removePlayer(peerId)
 
+    // Close local streams and servers for this peerId
+    for (const [streamId, info] of localStreams) {
+      if (info.peerId === peerId) {
+        info.socket.destroy()
+        localStreams.delete(streamId)
+      }
+    }
+    for (const [port, info] of activeTunnels) {
+      if (info.peerId === peerId) {
+        info.server.close()
+        activeTunnels.delete(port)
+        console.log(`[TUNNEL] Closed tunnel on port ${port} because peer disconnected`)
+      }
+    }
+    // Close remote streams for this peerId
+    for (const [streamId, info] of remoteStreams) {
+      if (info.peerId === peerId) {
+        info.socket.destroy()
+        remoteStreams.delete(streamId)
+      }
+    }
+
     console.log()
     console.log(`[DISCONNECT] ${player?.name || shortPeerId}`)
     console.log(`[NETWORK] ${connections.size} peer(s) connected`)
@@ -332,7 +464,77 @@ discovery.flushed()
 console.log('[SWARM] Started ✓')
 console.log('[INPUT] /status|/start|/stop|/restart <peer> <server>')
 console.log('[INPUT] /create <peer> <server> <template.jar>')
+console.log('[INPUT] /tunnel <peer> <server> [localPort] (Default: 25565)')
+console.log('[INPUT] /tunnels (List active tunnels)')
+console.log('[INPUT] /untunnel <localPort> (Close an active tunnel)')
 console.log()
+
+function startTunnel (peerId, serverId, localPort) {
+  if (activeTunnels.has(localPort)) {
+    console.log(`[TUNNEL] Port ${localPort} is already being used for a tunnel.`)
+    return
+  }
+
+  const server = createServer(socket => {
+    const streamId = crypto.randomBytes(16).toString('hex')
+    localStreams.set(streamId, { socket, peerId })
+
+    const peerConn = connectionsByPeerId.get(peerId)
+    if (!peerConn) {
+      console.log(`[TUNNEL] Peer ${peerId.slice(0, 8)} disconnected. Closing tunnel stream.`)
+      socket.destroy()
+      localStreams.delete(streamId)
+      return
+    }
+
+    // Request the remote peer to open a tunnel connection
+    send(peerConn, {
+      type: 'TUNNEL_OPEN',
+      streamId,
+      serverId
+    })
+
+    socket.on('data', chunk => {
+      const peerConn = connectionsByPeerId.get(peerId)
+      if (peerConn) {
+        send(peerConn, {
+          type: 'TUNNEL_DATA',
+          streamId,
+          data: b4a.toString(chunk, 'base64')
+        })
+      }
+    })
+
+    socket.on('close', () => {
+      localStreams.delete(streamId)
+      const peerConn = connectionsByPeerId.get(peerId)
+      if (peerConn) {
+        send(peerConn, {
+          type: 'TUNNEL_CLOSE',
+          streamId
+        })
+      }
+    })
+
+    socket.on('error', err => {
+      console.error(`[TUNNEL Socket Error] ${err.message}`)
+      socket.destroy()
+    })
+  })
+
+  server.listen(localPort, () => {
+    console.log(`\n[TUNNEL] Direct connection tunnel established!`)
+    console.log(`[TUNNEL] You can now connect your Minecraft client to: localhost:${localPort}`)
+    activeTunnels.set(localPort, { server, peerId, serverId })
+    rl.prompt()
+  })
+
+  server.on('error', err => {
+    console.error(`\n[TUNNEL Error] Failed to start local server on port ${localPort}: ${err.message}`)
+    activeTunnels.delete(localPort)
+    rl.prompt()
+  })
+}
 
 const rl = new Readline({
   input: process.stdin,
@@ -352,6 +554,51 @@ rl.on('line', line => {
 
   if (message === '/players') {
     showPlayers()
+  } else if (message === '/tunnels') {
+    if (activeTunnels.size === 0) {
+      console.log('[TUNNEL] No active tunnels')
+    } else {
+      console.log('[TUNNEL] Active tunnels:')
+      for (const [port, info] of activeTunnels) {
+        const alias = [...peerAliases].find(([, peerId]) => peerId === info.peerId)?.[0] || info.peerId.slice(0, 8)
+        console.log(`- localhost:${port} -> ${alias}:${info.serverId}`)
+      }
+    }
+  } else if (message.startsWith('/untunnel ')) {
+    const [, portStr] = message.split(/\s+/)
+    const port = parseInt(portStr, 10)
+    if (isNaN(port)) {
+      console.log('[TUNNEL] Usage: /untunnel <port>')
+    } else if (!activeTunnels.has(port)) {
+      console.log(`[TUNNEL] No active tunnel on port ${port}`)
+    } else {
+      const { server, peerId } = activeTunnels.get(port)
+      server.close()
+      activeTunnels.delete(port)
+      console.log(`[TUNNEL] Closed tunnel on port ${port}`)
+
+      // Close all local streams for this peerId
+      for (const [streamId, info] of localStreams) {
+        if (info.peerId === peerId) {
+          info.socket.destroy()
+          localStreams.delete(streamId)
+        }
+      }
+    }
+  } else if (message.startsWith('/tunnel ')) {
+    const [, peerPrefix, serverId, localPortStr] = message.split(/\s+/)
+    const resolved = resolvePeer(peerPrefix)
+    const localPort = localPortStr ? parseInt(localPortStr, 10) : 25565
+
+    if (!peerPrefix || !serverId) {
+      console.log('[TUNNEL] Usage: /tunnel <peer> <server> [localPort]')
+    } else if (resolved.error) {
+      console.log(`[TUNNEL] ${resolved.error}`)
+    } else if (isNaN(localPort) || localPort <= 0 || localPort > 65535) {
+      console.log('[TUNNEL] Invalid local port')
+    } else {
+      startTunnel(resolved.peerId, serverId, localPort)
+    }
   } else if (message.startsWith('/create ')) {
     const [, peerPrefix, serverId, template] = message.split(/\s+/)
     const resolved = resolvePeer(peerPrefix)
@@ -451,6 +698,23 @@ rl.on('line', line => {
 async function shutdown () {
   if (shuttingDown) return
   shuttingDown = true
+
+  // Close all active local tunnel servers
+  for (const [port, info] of activeTunnels) {
+    info.server.close()
+  }
+  activeTunnels.clear()
+
+  // Destroy all active client/server stream sockets
+  for (const [, info] of localStreams) {
+    info.socket.destroy()
+  }
+  localStreams.clear()
+
+  for (const [, info] of remoteStreams) {
+    info.socket.destroy()
+  }
+  remoteStreams.clear()
 
   console.log()
   console.log('[SWARM] Leaving network...')
