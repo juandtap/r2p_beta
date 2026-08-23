@@ -216,6 +216,7 @@ iniciar_servidor() {
             echo -e "${YELLOW}Puedes conectarte a la consola interactiva usando: tmux attach -t mc-$server_name${NC}"
         else
             echo -e "${RED}Error al iniciar el servidor en tmux. Revisa '$server_dir/stdout.log'.${NC}"
+            return 1
         fi
     else
         echo -e "${YELLOW}Advertencia: tmux no está instalado. Usando fallback con nohup...${NC}"
@@ -229,6 +230,8 @@ iniciar_servidor() {
             echo -e "${GREEN}Servidor '$server_name' iniciado (PID: $pid).${NC}"
         else
             echo -e "${RED}El servidor falló al iniciar o aún está levantándose. Revisa '$server_dir/stdout.log' y 'logs/latest.log'.${NC}"
+            rm -f server.pid
+            return 1
         fi
     fi
 }
@@ -238,6 +241,8 @@ iniciar_servidor() {
 # ------------------------------------------------------------------------------
 crear_servidor() {
     echo -e "${BLUE}=== Crear Servidor de Minecraft ===${NC}"
+    local server_name="$1"
+    local selected_template="$2"
     
     # Validar que exista el directorio minecraft/
     if [ ! -d "$MINECRAFT_DIR" ]; then
@@ -258,19 +263,22 @@ crear_servidor() {
         return 1
     fi
     
-    echo -e "${YELLOW}Seleccione el archivo base de Minecraft/Forge:${NC}"
-    local selected_template=""
-    select opt in "${templates[@]}"; do
-        if [ -n "$opt" ]; then
-            selected_template="$opt"
-            break
-        else
-            echo -e "${RED}Selección inválida. Intente de nuevo.${NC}"
-        fi
-    done
+    if [ -z "$selected_template" ]; then
+        echo -e "${YELLOW}Seleccione el archivo base de Minecraft/Forge:${NC}"
+        select opt in "${templates[@]}"; do
+            if [ -n "$opt" ]; then
+                selected_template="$opt"
+                break
+            else
+                echo -e "${RED}Selección inválida. Intente de nuevo.${NC}"
+            fi
+        done
+    elif [[ ! "$selected_template" =~ ^[a-zA-Z0-9._-]+\.jar$ ]] || [ ! -f "$MINECRAFT_DIR/$selected_template" ]; then
+        echo -e "${RED}Error: La plantilla '$selected_template' no existe o no es un .jar válido.${NC}"
+        return 1
+    fi
     
     # Pedir nombre del servidor
-    local server_name=""
     while [ -z "$server_name" ]; do
         read -rp "Ingrese el nombre del nuevo servidor (letras, números, guiones): " input_name
         # Limpiar caracteres no deseados
@@ -279,6 +287,11 @@ crear_servidor() {
             echo -e "${RED}El nombre no puede estar vacío y debe contener solo caracteres válidos.${NC}"
         fi
     done
+
+    if [[ ! "$server_name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        echo -e "${RED}Error: El nombre debe contener únicamente letras, números, _ o -.${NC}"
+        return 1
+    fi
     
     local server_dir="$SERVERS_DIR/$server_name"
     if [ -d "$server_dir" ]; then

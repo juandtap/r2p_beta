@@ -41,6 +41,7 @@ const session = new Session({
 // Deliberately unlimited: a room may contain any number of peer connections.
 const connections = new Set()
 const connectionsByPeerId = new Map()
+const peerAliases = new Map()
 let shuttingDown = false
 const stuip = new StuipId({
   connections: connectionsByPeerId,
@@ -114,10 +115,31 @@ function showPlayers () {
       : ''
     const you = player.playerId === selfId ? ' [YOU]' : ''
 
-    console.log(`- ${player.name} [${state}]${coordinator}${you}`)
+    const alias = [...peerAliases].find(([, peerId]) => peerId === player.playerId)?.[0]
+    console.log(`- ${alias ? `${alias} → ` : ''}${player.name} [${state}]${coordinator}${you}`)
   }
 
   console.log()
+}
+
+function addPeerAlias (peerId) {
+  if ([...peerAliases.values()].includes(peerId)) return
+  let number = 1
+  while (peerAliases.has(`peer${number}`)) number++
+  peerAliases.set(`peer${number}`, peerId)
+}
+
+function resolvePeer (nameOrPrefix) {
+  if (!nameOrPrefix) return { error: 'Peer is required' }
+  const aliased = peerAliases.get(nameOrPrefix.toLowerCase())
+  if (aliased && connectionsByPeerId.has(aliased)) return { peerId: aliased }
+
+  const matches = [...connectionsByPeerId.keys()]
+    .filter(peerId => peerId.startsWith(nameOrPrefix))
+  if (matches.length !== 1) {
+    return { error: `Peer must match one connection (matches: ${matches.length})` }
+  }
+  return { peerId: matches[0] }
 }
 
 function handleStart (message, peerId) {
@@ -160,9 +182,12 @@ swarm.on('connection', (conn, info) => {
 
   connections.add(conn)
   connectionsByPeerId.set(peerId, conn)
+  addPeerAlias(peerId)
+  const peerAlias = [...peerAliases].find(([, id]) => id === peerId)?.[0]
   session.addPlayer(peerId)
 
   console.log(`[PEER] ${shortPeerId} discovered`)
+  console.log(`[ALIAS] ${peerAlias}`)
   console.log(`[DIRECTION] ${info.client ? 'outgoing' : 'incoming'}`)
   console.log(`[CONNECTION] Successful ✓`)
   console.log(`[NETWORK] ${connections.size} peer(s) connected`)
@@ -269,6 +294,9 @@ swarm.on('connection', (conn, info) => {
   conn.on('close', () => {
     connections.delete(conn)
     if (connectionsByPeerId.get(peerId) === conn) connectionsByPeerId.delete(peerId)
+    for (const [alias, id] of peerAliases) {
+      if (id === peerId) peerAliases.delete(alias)
+    }
     stuip.peerDisconnected(peerId)
     const player = session.players.get(peerId)
     session.removePlayer(peerId)
@@ -302,7 +330,8 @@ discovery.flushed()
   })
 
 console.log('[SWARM] Started ✓')
-console.log('[INPUT] Chat or /status <peer-id-prefix> <server-id>')
+console.log('[INPUT] /status|/start|/stop|/restart <peer> <server>')
+console.log('[INPUT] /create <peer> <server> <template.jar>')
 console.log()
 
 const rl = new Readline({
@@ -323,18 +352,48 @@ rl.on('line', line => {
 
   if (message === '/players') {
     showPlayers()
-  } else if (message.startsWith('/status ')) {
-    const [, peerPrefix, serverId] = message.split(/\s+/)
-    const matches = [...connectionsByPeerId.keys()]
-      .filter(peerId => peerId.startsWith(peerPrefix || ''))
+  } else if (message.startsWith('/create ')) {
+    const [, peerPrefix, serverId, template] = message.split(/\s+/)
+    const resolved = resolvePeer(peerPrefix)
+
+    if (!peerPrefix || !serverId || !template) {
+      console.log('[ACTION] Usage: /create <peer-or-alias> <server-id> <template-or-alias>')
+    } else if (resolved.error) {
+      console.log(`[ACTION] ${resolved.error}`)
+    } else {
+      console.log(`[ACTION] Creating ${serverId} on ${peerPrefix} from ${template}...`)
+      stuip.sendAction(resolved.peerId, {
+        action: 'SERVER_CREATE',
+        serverId,
+        payload: { template }
+      }).then(result => {
+        console.log(`\n[ACTION RESULT] ${result.success ? 'SUCCESS' : 'FAILED'} (exit ${result.exitCode})`)
+        if (result.stdout) process.stdout.write(`${result.stdout}\n`)
+        if (result.stderr) process.stderr.write(`${result.stderr}\n`)
+        rl.prompt()
+      }).catch(error => {
+        console.error(`[ACTION ERROR] ${error.message}`)
+        rl.prompt()
+      })
+    }
+  } else if (/^\/(status|start|stop|restart)\s/.test(message)) {
+    const [command, peerPrefix, serverId] = message.split(/\s+/)
+    const resolved = resolvePeer(peerPrefix)
 
     if (!peerPrefix || !serverId) {
-      console.log('[ACTION] Usage: /status <peer-id-or-prefix> <server-id>')
-    } else if (matches.length !== 1) {
-      console.log(`[ACTION] Peer prefix must match exactly one connected peer (matches: ${matches.length})`)
+      console.log(`[ACTION] Usage: ${command} <peer-id-or-prefix> <server-id>`)
+    } else if (resolved.error) {
+      console.log(`[ACTION] ${resolved.error}`)
     } else {
-      stuip.sendAction(matches[0], {
-        action: 'SERVER_STATUS',
+      const action = {
+        '/status': 'SERVER_STATUS',
+        '/start': 'SERVER_START',
+        '/stop': 'SERVER_STOP',
+        '/restart': 'SERVER_RESTART'
+      }[command]
+
+      stuip.sendAction(resolved.peerId, {
+        action,
         serverId,
         payload: {}
       }).then(result => {

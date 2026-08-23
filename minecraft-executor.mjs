@@ -15,7 +15,7 @@ function appendLimited (current, chunk, remainingBytes) {
 export async function executeMinecraftAction (request, options = {}) {
   const validated = validateActionRequest(request)
   const scriptPath = options.scriptPath || DEFAULT_SCRIPT_PATH
-  const timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS
+  const timeoutMs = options.timeoutMs || actionTimeout(validated.action)
   const maxOutputBytes = options.maxOutputBytes || DEFAULT_MAX_OUTPUT_BYTES
 
   let stat
@@ -67,4 +67,11 @@ export async function executeMinecraftAction (request, options = {}) {
       })
     })
   })
+}
+
+function actionTimeout (action) {
+  if (action === 'SERVER_CREATE') return 10 * 60_000
+  if (action === 'SERVER_RESTART') return 60_000
+  if (action === 'SERVER_STOP') return 30_000
+  return DEFAULT_TIMEOUT_MS
 }

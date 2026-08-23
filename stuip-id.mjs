@@ -4,7 +4,7 @@ import { validateActionRequest } from './stuip-actions.mjs'
 const REQUEST_ID_PATTERN = /^[a-f0-9]{32}$/
 
 export class StuipId {
-  constructor ({ connections, send, executeAction, timeoutMs = 20_000 }) {
+  constructor ({ connections, send, executeAction, timeoutMs = 11 * 60_000 }) {
     this.connections = connections
     this.send = send
     this.executeAction = executeAction
