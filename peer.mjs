@@ -524,7 +524,7 @@ function startTunnel(peerId, serverId, localPort) {
     })
   })
 
-  server.listen(localPort, () => {
+  server.listen(localPort, '127.0.0.1', () => {
     console.log(`\n[TUNNEL] Direct connection tunnel established!`)
     console.log(`[TUNNEL] You can now connect your Minecraft client to: localhost:${localPort}`)
     activeTunnels.set(localPort, { server, peerId, serverId })
