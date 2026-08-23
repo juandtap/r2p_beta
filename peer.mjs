@@ -332,6 +332,7 @@ discovery.flushed()
 console.log('[SWARM] Started ✓')
 console.log('[INPUT] /status|/start|/stop|/restart <peer> <server>')
 console.log('[INPUT] /create <peer> <server> <template.jar>')
+console.log('[INPUT] /list|/health <peer>, /config|/delete|/command ...')
 console.log()
 
 const rl = new Readline({
@@ -352,6 +353,57 @@ rl.on('line', line => {
 
   if (message === '/players') {
     showPlayers()
+  } else if (/^\/(list|health)\s/.test(message)) {
+    const [command, peerName] = message.split(/\s+/)
+    const resolved = resolvePeer(peerName)
+    if (resolved.error) {
+      console.log(`[ACTION] ${resolved.error}`)
+    } else {
+      stuip.sendAction(resolved.peerId, {
+        action: command === '/list' ? 'SERVER_LIST' : 'HEALTHCHECK',
+        payload: {}
+      }).then(showActionResult).catch(showActionError)
+    }
+  } else if (message.startsWith('/config ')) {
+    const [, peerName, serverId, key, ...valueParts] = message.split(/\s+/)
+    const resolved = resolvePeer(peerName)
+    if (!serverId || !key || valueParts.length === 0) {
+      console.log('[ACTION] Usage: /config <peer> <server> <key> <value>')
+    } else if (resolved.error) {
+      console.log(`[ACTION] ${resolved.error}`)
+    } else {
+      stuip.sendAction(resolved.peerId, {
+        action: 'SERVER_UPDATE_CONFIG',
+        serverId,
+        payload: { key, value: valueParts.join(' ') }
+      }).then(showActionResult).catch(showActionError)
+    }
+  } else if (message.startsWith('/delete ')) {
+    const [, peerName, serverId] = message.split(/\s+/)
+    const resolved = resolvePeer(peerName)
+    if (!serverId) {
+      console.log('[ACTION] Usage: /delete <peer> <server>')
+    } else if (resolved.error) {
+      console.log(`[ACTION] ${resolved.error}`)
+    } else {
+      stuip.sendAction(resolved.peerId, {
+        action: 'SERVER_DELETE', serverId, payload: {}
+      }).then(showActionResult).catch(showActionError)
+    }
+  } else if (message.startsWith('/command ')) {
+    const [, peerName, serverId, ...commandParts] = message.split(/\s+/)
+    const resolved = resolvePeer(peerName)
+    if (!serverId || commandParts.length === 0) {
+      console.log('[ACTION] Usage: /command <peer> <server> <minecraft-command>')
+    } else if (resolved.error) {
+      console.log(`[ACTION] ${resolved.error}`)
+    } else {
+      stuip.sendAction(resolved.peerId, {
+        action: 'SERVER_COMMAND',
+        serverId,
+        payload: { command: commandParts.join(' ') }
+      }).then(showActionResult).catch(showActionError)
+    }
   } else if (message.startsWith('/create ')) {
     const [, peerPrefix, serverId, template] = message.split(/\s+/)
     const resolved = resolvePeer(peerPrefix)
@@ -447,6 +499,18 @@ rl.on('line', line => {
 
   rl.prompt()
 })
+
+function showActionResult (result) {
+  console.log(`\n[ACTION RESULT] ${result.success ? 'SUCCESS' : 'FAILED'} (exit ${result.exitCode})`)
+  if (result.stdout) process.stdout.write(`${result.stdout}\n`)
+  if (result.stderr) process.stderr.write(`${result.stderr}\n`)
+  rl.prompt()
+}
+
+function showActionError (error) {
+  console.error(`[ACTION ERROR] ${error.message}`)
+  rl.prompt()
+}
 
 async function shutdown () {
   if (shuttingDown) return

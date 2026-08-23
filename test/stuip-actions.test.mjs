@@ -76,3 +76,29 @@ test('rejects template paths and non-jar templates', () => {
     }), /template/)
   }
 })
+
+test('maps list, config, delete, command and healthcheck actions', () => {
+  assert.deepEqual(actionArguments({ action: 'SERVER_LIST', payload: {} }), ['listar_servidor'])
+  assert.deepEqual(actionArguments({ action: 'HEALTHCHECK', payload: {} }), ['healthcheck'])
+  assert.deepEqual(actionArguments({
+    action: 'SERVER_UPDATE_CONFIG', serverId: 'server01',
+    payload: { key: 'motd', value: 'My home server' }
+  }), ['administrar_servidor', 'server01', 'motd', 'My home server'])
+  assert.deepEqual(actionArguments({
+    action: 'SERVER_DELETE', serverId: 'server01', payload: {}
+  }), ['borrar_servidor', 'server01', '--force'])
+  assert.deepEqual(actionArguments({
+    action: 'SERVER_COMMAND', serverId: 'server01', payload: { command: 'say hello' }
+  }), ['command', 'server01', 'say hello'])
+})
+
+test('rejects unsafe config and console commands', () => {
+  assert.throws(() => validateActionRequest({
+    action: 'SERVER_UPDATE_CONFIG', serverId: 'server01',
+    payload: { key: '../motd', value: 'x' }
+  }), /property key/)
+  assert.throws(() => validateActionRequest({
+    action: 'SERVER_COMMAND', serverId: 'server01',
+    payload: { command: 'stop' }
+  }), /not allowed/)
+})
