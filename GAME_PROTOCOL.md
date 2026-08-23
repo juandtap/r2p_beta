@@ -74,6 +74,12 @@ ordered player list:
 
 The game should not start simulation before this callback.
 
+All peers generate the complete dungeon from `seed` before simulation starts.
+They sort `players` lexicographically and assign player index `i` to dungeon
+room index `i`. The dungeon must contain at least as many starting rooms as
+players, ensuring that every player begins in a different room while every peer
+still computes exactly the same map.
+
 ## Suggested MVP events
 
 The battle-royale MVP uses two network game events.

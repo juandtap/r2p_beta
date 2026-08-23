@@ -4,6 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "build:sprites": "node scripts/build-ansi-sprites.mjs",
+    "play": "node play.mjs",
     "test": "node --test"
   },
   "keywords": [],
