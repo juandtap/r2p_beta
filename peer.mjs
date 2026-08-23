@@ -23,7 +23,7 @@ const activeTunnels = new Map() // localPort -> { server, peerId, serverId }
 const localStreams = new Map() // streamId -> { socket, peerId }
 const remoteStreams = new Map() // streamId -> { socket, peerId }
 
-function getServerPort (serverId) {
+function getServerPort(serverId) {
   try {
     const serversDir = fileURLToPath(new URL('./servers', import.meta.url))
     const propertiesPath = path.join(serversDir, serverId, 'server.properties')
@@ -95,18 +95,18 @@ const randomGame = randomGameEnabled
 
 if (randomGame) game.attach(randomGame)
 
-function send (conn, message) {
+function send(conn, message) {
   conn.write(encodeMessage({
     v: PROTOCOL_VERSION,
     ...message
   }))
 }
 
-function broadcast (message) {
+function broadcast(message) {
   for (const conn of connections) send(conn, message)
 }
 
-async function broadcastAndFlush (message) {
+async function broadcastAndFlush(message) {
   const encoded = encodeMessage({
     v: PROTOCOL_VERSION,
     ...message
@@ -130,7 +130,7 @@ async function broadcastAndFlush (message) {
   })))
 }
 
-function showPlayers () {
+function showPlayers() {
   console.log('\nPlayers:')
 
   for (const player of session.orderedPlayers) {
@@ -147,14 +147,14 @@ function showPlayers () {
   console.log()
 }
 
-function addPeerAlias (peerId) {
+function addPeerAlias(peerId) {
   if ([...peerAliases.values()].includes(peerId)) return
   let number = 1
   while (peerAliases.has(`peer${number}`)) number++
   peerAliases.set(`peer${number}`, peerId)
 }
 
-function resolvePeer (nameOrPrefix) {
+function resolvePeer(nameOrPrefix) {
   if (!nameOrPrefix) return { error: 'Peer is required' }
   const aliased = peerAliases.get(nameOrPrefix.toLowerCase())
   if (aliased && connectionsByPeerId.has(aliased)) return { peerId: aliased }
@@ -167,7 +167,7 @@ function resolvePeer (nameOrPrefix) {
   return { peerId: matches[0] }
 }
 
-function handleStart (message, peerId) {
+function handleStart(message, peerId) {
   if (peerId !== session.coordinatorId) {
     console.log(`[SESSION] Rejected START from non-coordinator ${peerId.slice(0, 8)}`)
     return
@@ -464,12 +464,9 @@ discovery.flushed()
 console.log('[SWARM] Started ✓')
 console.log('[INPUT] /status|/start|/stop|/restart <peer> <server>')
 console.log('[INPUT] /create <peer> <server> <template.jar>')
-console.log('[INPUT] /tunnel <peer> <server> [localPort] (Default: 25565)')
-console.log('[INPUT] /tunnels (List active tunnels)')
-console.log('[INPUT] /untunnel <localPort> (Close an active tunnel)')
 console.log()
 
-function startTunnel (peerId, serverId, localPort) {
+function startTunnel(peerId, serverId, localPort) {
   if (activeTunnels.has(localPort)) {
     console.log(`[TUNNEL] Port ${localPort} is already being used for a tunnel.`)
     return
@@ -554,51 +551,6 @@ rl.on('line', line => {
 
   if (message === '/players') {
     showPlayers()
-  } else if (message === '/tunnels') {
-    if (activeTunnels.size === 0) {
-      console.log('[TUNNEL] No active tunnels')
-    } else {
-      console.log('[TUNNEL] Active tunnels:')
-      for (const [port, info] of activeTunnels) {
-        const alias = [...peerAliases].find(([, peerId]) => peerId === info.peerId)?.[0] || info.peerId.slice(0, 8)
-        console.log(`- localhost:${port} -> ${alias}:${info.serverId}`)
-      }
-    }
-  } else if (message.startsWith('/untunnel ')) {
-    const [, portStr] = message.split(/\s+/)
-    const port = parseInt(portStr, 10)
-    if (isNaN(port)) {
-      console.log('[TUNNEL] Usage: /untunnel <port>')
-    } else if (!activeTunnels.has(port)) {
-      console.log(`[TUNNEL] No active tunnel on port ${port}`)
-    } else {
-      const { server, peerId } = activeTunnels.get(port)
-      server.close()
-      activeTunnels.delete(port)
-      console.log(`[TUNNEL] Closed tunnel on port ${port}`)
-
-      // Close all local streams for this peerId
-      for (const [streamId, info] of localStreams) {
-        if (info.peerId === peerId) {
-          info.socket.destroy()
-          localStreams.delete(streamId)
-        }
-      }
-    }
-  } else if (message.startsWith('/tunnel ')) {
-    const [, peerPrefix, serverId, localPortStr] = message.split(/\s+/)
-    const resolved = resolvePeer(peerPrefix)
-    const localPort = localPortStr ? parseInt(localPortStr, 10) : 25565
-
-    if (!peerPrefix || !serverId) {
-      console.log('[TUNNEL] Usage: /tunnel <peer> <server> [localPort]')
-    } else if (resolved.error) {
-      console.log(`[TUNNEL] ${resolved.error}`)
-    } else if (isNaN(localPort) || localPort <= 0 || localPort > 65535) {
-      console.log('[TUNNEL] Invalid local port')
-    } else {
-      startTunnel(resolved.peerId, serverId, localPort)
-    }
   } else if (message.startsWith('/create ')) {
     const [, peerPrefix, serverId, template] = message.split(/\s+/)
     const resolved = resolvePeer(peerPrefix)
@@ -695,7 +647,19 @@ rl.on('line', line => {
   rl.prompt()
 })
 
-async function shutdown () {
+function showActionResult(result) {
+  console.log(`\n[ACTION RESULT] ${result.success ? 'SUCCESS' : 'FAILED'} (exit ${result.exitCode})`)
+  if (result.stdout) process.stdout.write(`${result.stdout}\n`)
+  if (result.stderr) process.stderr.write(`${result.stderr}\n`)
+  rl.prompt()
+}
+
+function showActionError(error) {
+  console.error(`[ACTION ERROR] ${error.message}`)
+  rl.prompt()
+}
+
+async function shutdown() {
   if (shuttingDown) return
   shuttingDown = true
 

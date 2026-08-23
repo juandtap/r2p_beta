@@ -79,6 +79,21 @@ Manage its lifecycle remotely:
 ```
 
 `SERVER_CREATE`, `SERVER_STATUS`, `SERVER_START`, `SERVER_STOP`, and
-`SERVER_RESTART` are remotely enabled.
+`SERVER_RESTART`, `SERVER_LIST`, `SERVER_UPDATE_CONFIG`, `SERVER_DELETE`,
+`SERVER_COMMAND`, and `HEALTHCHECK` are remotely enabled.
 Server IDs accept only letters, numbers, `_`, and `-`; template paths are never
 accepted.
+
+## Remaining remote commands
+
+```text
+/list peer1
+/config peer1 server01 motd My home server
+/command peer1 server01 say Hello from Stuip-id
+/health peer1
+/delete peer1 server01
+/quit
+```
+
+`/delete` permanently removes the remote server. Console commands are restricted
+to an internal Minecraft-command allowlist; shell commands are never accepted.

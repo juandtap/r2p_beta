@@ -491,6 +491,7 @@ listar_servidor() {
 # ------------------------------------------------------------------------------
 borrar_servidor() {
     local server_name="$1"
+    local force_delete="$2"
     if [ -z "$server_name" ]; then
         server_name=$(select_server_interactive "Seleccione el servidor que desea borrar:")
         [ $? -ne 0 ] && return 1
@@ -502,14 +503,16 @@ borrar_servidor() {
         return 1
     fi
     
-    # Cuadro de verificación / confirmación
-    echo -e "${RED}${BOLD}!!! ADVERTENCIA DE ELIMINACIÓN !!!${NC}"
-    echo -e "${RED}Esto eliminará de forma permanente el servidor '$server_name' y todos sus mundos y archivos.${NC}"
-    read -rp "Para confirmar, por favor escriba exactamente el nombre del servidor ($server_name): " confirm
-    
-    if [ "$confirm" != "$server_name" ]; then
-        echo -e "${YELLOW}Cancelado. El nombre no coincide.${NC}"
-        return 1
+    if [ "$force_delete" != "--force" ]; then
+        # Mantener confirmación interactiva para uso manual.
+        echo -e "${RED}${BOLD}!!! ADVERTENCIA DE ELIMINACIÓN !!!${NC}"
+        echo -e "${RED}Esto eliminará de forma permanente el servidor '$server_name' y todos sus mundos y archivos.${NC}"
+        read -rp "Para confirmar, por favor escriba exactamente el nombre del servidor ($server_name): " confirm
+
+        if [ "$confirm" != "$server_name" ]; then
+            echo -e "${YELLOW}Cancelado. El nombre no coincide.${NC}"
+            return 1
+        fi
     fi
     
     # Detener servidor primero si está activo
