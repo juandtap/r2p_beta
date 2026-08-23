@@ -1,17 +1,24 @@
 {
-  "name": "r2p_beta",
+  "name": "stuip-id",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Server TUI Peer-to-peer manager for home servers",
+  "main": "peer.mjs",
   "scripts": {
     "build:sprites": "node scripts/build-ansi-sprites.mjs",
-    "play": "node play.mjs",
+    "start": "bare peer.mjs",
+    "play": "bare play.mjs",
     "test": "node --test"
   },
   "keywords": [],
   "type": "commonjs",
   "dependencies": {
     "b4a": "^1.8.1",
+    "bare-crypto": "^1.15.3",
+    "bare-fs": "^4.8.0",
+    "bare-path": "^3.1.1",
+    "bare-process": "^4.5.1",
+    "bare-readline": "^1.3.1",
+    "bare-subprocess": "^6.1.0",
     "hyperswarm": "^4.17.0"
   }
 }

@@ -1,6 +1,7 @@
 import Hyperswarm from 'hyperswarm'
-import crypto from 'crypto'
-import readline from 'readline'
+import crypto from 'bare-crypto'
+import process from 'bare-process'
+import Readline from 'bare-readline'
 import {
   PROTOCOL_VERSION,
   createMessageDecoder,
@@ -9,12 +10,14 @@ import {
 import { Session, defaultName } from './session.mjs'
 import { GameAdapter } from './game-adapter.mjs'
 import { createRandomGame } from './examples/random-game.mjs'
+import { executeMinecraftAction } from './minecraft-executor.mjs'
+import { StuipId } from './stuip-id.mjs'
 
 const room = process.argv[2]
 const randomGameEnabled = process.argv.includes('--random-game')
 
 if (!room) {
-  console.error('Usage: node peer.mjs <room-name>')
+  console.error('Usage: bare peer.mjs <room-name>')
   process.exit(1)
 }
 
@@ -37,7 +40,13 @@ const session = new Session({
 
 // Deliberately unlimited: a room may contain any number of peer connections.
 const connections = new Set()
+const connectionsByPeerId = new Map()
 let shuttingDown = false
+const stuip = new StuipId({
+  connections: connectionsByPeerId,
+  send,
+  executeAction: executeMinecraftAction
+})
 const game = new GameAdapter({
   sendEvent: event => {
     if (event.type === 'GAME_OVER' && !session.isCoordinator) {
@@ -135,7 +144,7 @@ function handleStart (message, peerId) {
 }
 
 console.log()
-console.log('=== P2P ROGUE NETWORK ===')
+console.log('=== STUIP-ID P2P SERVER MANAGER ===')
 console.log()
 console.log(`[ROOM] ${room}`)
 console.log(`[ROOM ID] ${roomId}`)
@@ -150,6 +159,7 @@ swarm.on('connection', (conn, info) => {
   const shortPeerId = peerId.slice(0, 8)
 
   connections.add(conn)
+  connectionsByPeerId.set(peerId, conn)
   session.addPlayer(peerId)
 
   console.log(`[PEER] ${shortPeerId} discovered`)
@@ -160,7 +170,11 @@ swarm.on('connection', (conn, info) => {
 
   const decode = createMessageDecoder({
     onMessage: message => {
-      if (message.type === 'HELLO') {
+      if (message.type === 'EXEC_ACTION' || message.type === 'ACTION_RESULT') {
+        stuip.handleMessage(message, peerId, conn).catch(error => {
+          console.error(`[ACTION ERROR] ${error.message}`)
+        })
+      } else if (message.type === 'HELLO') {
         console.log(`[PROTOCOL] ${shortPeerId} uses version ${message.v}`)
       } else if (message.type === 'JOIN') {
         if (message.playerId !== peerId) {
@@ -254,6 +268,8 @@ swarm.on('connection', (conn, info) => {
 
   conn.on('close', () => {
     connections.delete(conn)
+    if (connectionsByPeerId.get(peerId) === conn) connectionsByPeerId.delete(peerId)
+    stuip.peerDisconnected(peerId)
     const player = session.players.get(peerId)
     session.removePlayer(peerId)
 
@@ -286,10 +302,10 @@ discovery.flushed()
   })
 
 console.log('[SWARM] Started ✓')
-console.log('[INPUT] Type a message and press ENTER')
+console.log('[INPUT] Chat or /status <peer-id-prefix> <server-id>')
 console.log()
 
-const rl = readline.createInterface({
+const rl = new Readline({
   input: process.stdin,
   output: process.stdout,
   prompt: '> '
@@ -307,6 +323,30 @@ rl.on('line', line => {
 
   if (message === '/players') {
     showPlayers()
+  } else if (message.startsWith('/status ')) {
+    const [, peerPrefix, serverId] = message.split(/\s+/)
+    const matches = [...connectionsByPeerId.keys()]
+      .filter(peerId => peerId.startsWith(peerPrefix || ''))
+
+    if (!peerPrefix || !serverId) {
+      console.log('[ACTION] Usage: /status <peer-id-or-prefix> <server-id>')
+    } else if (matches.length !== 1) {
+      console.log(`[ACTION] Peer prefix must match exactly one connected peer (matches: ${matches.length})`)
+    } else {
+      stuip.sendAction(matches[0], {
+        action: 'SERVER_STATUS',
+        serverId,
+        payload: {}
+      }).then(result => {
+        console.log(`\n[ACTION RESULT] ${result.success ? 'SUCCESS' : 'FAILED'} (exit ${result.exitCode})`)
+        if (result.stdout) process.stdout.write(`${result.stdout}\n`)
+        if (result.stderr) process.stderr.write(`${result.stderr}\n`)
+        rl.prompt()
+      }).catch(error => {
+        console.error(`[ACTION ERROR] ${error.message}`)
+        rl.prompt()
+      })
+    }
   } else if (message === '/ready') {
     session.setReady(selfId, true)
     broadcast({
