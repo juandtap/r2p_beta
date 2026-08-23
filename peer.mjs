@@ -464,6 +464,11 @@ discovery.flushed()
 console.log('[SWARM] Started ✓')
 console.log('[INPUT] /status|/start|/stop|/restart <peer> <server>')
 console.log('[INPUT] /create <peer> <server> <template.jar>')
+console.log('[INPUT] /list <peer> | /delete <peer> <server>')
+console.log('[INPUT] /config <peer> <server> <key> <value>')
+console.log('[INPUT] /command <peer> <server> <minecraft-command>')
+console.log('[INPUT] /tunnel <peer> <server> [localPort] (Default: 25565)')
+console.log('[INPUT] /tunnels (List tunnels) | /untunnel <port>')
 console.log()
 
 function startTunnel(peerId, serverId, localPort) {
@@ -551,6 +556,115 @@ rl.on('line', line => {
 
   if (message === '/players') {
     showPlayers()
+  } else if (message === '/tunnels') {
+    if (activeTunnels.size === 0) {
+      console.log('[TUNNEL] No active tunnels')
+    } else {
+      console.log('[TUNNEL] Active tunnels:')
+      for (const [port, info] of activeTunnels) {
+        const alias = [...peerAliases].find(([, peerId]) => peerId === info.peerId)?.[0] || info.peerId.slice(0, 8)
+        console.log(`- localhost:${port} -> ${alias}:${info.serverId}`)
+      }
+    }
+  } else if (message.startsWith('/untunnel ')) {
+    const [, portStr] = message.split(/\s+/)
+    const port = parseInt(portStr, 10)
+    if (isNaN(port)) {
+      console.log('[TUNNEL] Usage: /untunnel <port>')
+    } else if (!activeTunnels.has(port)) {
+      console.log(`[TUNNEL] No active tunnel on port ${port}`)
+    } else {
+      const { server, peerId } = activeTunnels.get(port)
+      server.close()
+      activeTunnels.delete(port)
+      console.log(`[TUNNEL] Closed tunnel on port ${port}`)
+
+      // Close all local streams for this peerId
+      for (const [streamId, info] of localStreams) {
+        if (info.peerId === peerId) {
+          info.socket.destroy()
+          localStreams.delete(streamId)
+        }
+      }
+    }
+  } else if (message.startsWith('/tunnel ')) {
+    const [, peerPrefix, serverId, localPortStr] = message.split(/\s+/)
+    const resolved = resolvePeer(peerPrefix)
+    const localPort = localPortStr ? parseInt(localPortStr, 10) : 25565
+
+    if (!peerPrefix || !serverId) {
+      console.log('[TUNNEL] Usage: /tunnel <peer> <server> [localPort]')
+    } else if (resolved.error) {
+      console.log(`[TUNNEL] ${resolved.error}`)
+    } else if (isNaN(localPort) || localPort <= 0 || localPort > 65535) {
+      console.log('[TUNNEL] Invalid local port')
+    } else {
+      startTunnel(resolved.peerId, serverId, localPort)
+    }
+  } else if (message.startsWith('/command ')) {
+    const parts = message.split(/\s+/)
+    const peerPrefix = parts[1]
+    const serverId = parts[2]
+    const commandText = parts.slice(3).join(' ')
+    const resolved = resolvePeer(peerPrefix)
+
+    if (!peerPrefix || !serverId || !commandText) {
+      console.log('[ACTION] Usage: /command <peer> <server-id> <minecraft-command>')
+    } else if (resolved.error) {
+      console.log(`[ACTION] ${resolved.error}`)
+    } else {
+      console.log(`[ACTION] Sending command to ${serverId} on ${peerPrefix}...`)
+      stuip.sendAction(resolved.peerId, {
+        action: 'SERVER_COMMAND',
+        serverId,
+        payload: { command: commandText }
+      }).then(showActionResult).catch(showActionError)
+    }
+  } else if (message.startsWith('/delete ')) {
+    const [, peerPrefix, serverId] = message.split(/\s+/)
+    const resolved = resolvePeer(peerPrefix)
+
+    if (!peerPrefix || !serverId) {
+      console.log('[ACTION] Usage: /delete <peer> <server-id>')
+    } else if (resolved.error) {
+      console.log(`[ACTION] ${resolved.error}`)
+    } else {
+      console.log(`[ACTION] Deleting server ${serverId} on ${peerPrefix}...`)
+      stuip.sendAction(resolved.peerId, {
+        action: 'SERVER_DELETE',
+        serverId
+      }).then(showActionResult).catch(showActionError)
+    }
+  } else if (message.startsWith('/config ')) {
+    const [, peerPrefix, serverId, key, value] = message.split(/\s+/)
+    const resolved = resolvePeer(peerPrefix)
+
+    if (!peerPrefix || !serverId || !key || !value) {
+      console.log('[ACTION] Usage: /config <peer> <server-id> <key> <value>')
+    } else if (resolved.error) {
+      console.log(`[ACTION] ${resolved.error}`)
+    } else {
+      console.log(`[ACTION] Setting config ${key}=${value} on ${serverId} at ${peerPrefix}...`)
+      stuip.sendAction(resolved.peerId, {
+        action: 'SERVER_UPDATE_CONFIG',
+        serverId,
+        payload: { key, value }
+      }).then(showActionResult).catch(showActionError)
+    }
+  } else if (message.startsWith('/list ')) {
+    const [, peerPrefix] = message.split(/\s+/)
+    const resolved = resolvePeer(peerPrefix)
+
+    if (!peerPrefix) {
+      console.log('[ACTION] Usage: /list <peer>')
+    } else if (resolved.error) {
+      console.log(`[ACTION] ${resolved.error}`)
+    } else {
+      console.log(`[ACTION] Listing servers on ${peerPrefix}...`)
+      stuip.sendAction(resolved.peerId, {
+        action: 'SERVER_LIST'
+      }).then(showActionResult).catch(showActionError)
+    }
   } else if (message.startsWith('/create ')) {
     const [, peerPrefix, serverId, template] = message.split(/\s+/)
     const resolved = resolvePeer(peerPrefix)
@@ -565,15 +679,7 @@ rl.on('line', line => {
         action: 'SERVER_CREATE',
         serverId,
         payload: { template }
-      }).then(result => {
-        console.log(`\n[ACTION RESULT] ${result.success ? 'SUCCESS' : 'FAILED'} (exit ${result.exitCode})`)
-        if (result.stdout) process.stdout.write(`${result.stdout}\n`)
-        if (result.stderr) process.stderr.write(`${result.stderr}\n`)
-        rl.prompt()
-      }).catch(error => {
-        console.error(`[ACTION ERROR] ${error.message}`)
-        rl.prompt()
-      })
+      }).then(showActionResult).catch(showActionError)
     }
   } else if (/^\/(status|start|stop|restart)\s/.test(message)) {
     const [command, peerPrefix, serverId] = message.split(/\s+/)
@@ -595,15 +701,7 @@ rl.on('line', line => {
         action,
         serverId,
         payload: {}
-      }).then(result => {
-        console.log(`\n[ACTION RESULT] ${result.success ? 'SUCCESS' : 'FAILED'} (exit ${result.exitCode})`)
-        if (result.stdout) process.stdout.write(`${result.stdout}\n`)
-        if (result.stderr) process.stderr.write(`${result.stderr}\n`)
-        rl.prompt()
-      }).catch(error => {
-        console.error(`[ACTION ERROR] ${error.message}`)
-        rl.prompt()
-      })
+      }).then(showActionResult).catch(showActionError)
     }
   } else if (message === '/ready') {
     session.setReady(selfId, true)

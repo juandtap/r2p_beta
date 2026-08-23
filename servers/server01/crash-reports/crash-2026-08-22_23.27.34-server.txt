@@ -1,0 +1,53 @@
+---- Minecraft Crash Report ----
+// Hey, that tickles! Hehehe!
+
+Time: 2026-08-22 23:27:34
+Description: Exception in server tick loop
+
+java.lang.IllegalStateException: Failed to initialize server
+	at net.minecraft.server.MinecraftServer.w(SourceFile:684)
+	at net.minecraft.server.MinecraftServer.a(SourceFile:265)
+	at java.base/java.lang.Thread.run(Thread.java:1516)
+
+
+A detailed walkthrough of the error, its code path and all known details is as follows:
+---------------------------------------------------------------------------------------
+
+-- System Details --
+Details:
+	Minecraft Version: 1.20.1
+	Minecraft Version ID: 1.20.1
+	Operating System: Linux (amd64) version 7.2.0-1-cachyos
+	Java Version: 26.0.2, Arch Linux
+	Java VM Version: OpenJDK 64-Bit Server VM (mixed mode, sharing), Arch Linux
+	Memory: 933864696 bytes (890 MiB) / 1073741824 bytes (1024 MiB) up to 1073741824 bytes (1024 MiB)
+	CPUs: 16
+	Processor Vendor: GenuineIntel
+	Processor Name: 12th Gen Intel(R) Core(TM) i7-12650H
+	Identifier: Intel64 Family 6 Model 154 Stepping 3
+	Microarchitecture: Alder Lake
+	Frequency (GHz): -0.00
+	Number of physical packages: 1
+	Number of physical CPUs: 10
+	Number of logical CPUs: 16
+	Graphics card #0 name: Alder Lake-P GT1 [UHD Graphics]
+	Graphics card #0 vendor: Intel Corporation (0x8086)
+	Graphics card #0 VRAM (MB): 256.00
+	Graphics card #0 deviceId: 0x46a3
+	Graphics card #0 versionInfo: unknown
+	Graphics card #1 name: AD107M [GeForce RTX 4060 Max-Q / Mobile]
+	Graphics card #1 vendor: NVIDIA Corporation (0x10de)
+	Graphics card #1 VRAM (MB): 8224.00
+	Graphics card #1 deviceId: 0x28a0
+	Graphics card #1 versionInfo: unknown
+	Virtual memory max (MB): 23530.76
+	Virtual memory used (MB): 14723.15
+	Swap memory total (MB): 15687.00
+	Swap memory used (MB): 2288.88
+	JVM Flags: 2 total; -Xmx1024M -Xms1024M
+	Server Running: true
+	Data Packs: vanilla
+	Enabled Feature Flags: minecraft:vanilla
+	World Generation: Stable
+	Is Modded: Probably not. Server jar signature and brand is untouched
+	Type: Dedicated Server (map_server.txt)
